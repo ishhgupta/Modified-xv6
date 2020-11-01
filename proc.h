@@ -1,3 +1,5 @@
+#include "pstat.h"
+
 // Per-CPU state
 struct cpu {
   uchar apicid;                // Local APIC ID
@@ -52,6 +54,9 @@ struct proc {
   int ctime;                   /// process creation time
   int etime;                   /// process end time
   int rtime;                   /// process running time
+
+  int priority;                ///priority of processes 
+  struct proc_stat pstat; 
 };
 
 // Process memory is laid out contiguously, low addresses first:
