@@ -20,10 +20,21 @@ sys_exit(void)
   return 0;  // not reached
 }
 
+
+
 int
 sys_wait(void)
 {
   return wait();
+}
+
+int sys_waitx(void) {
+    int *wtime, *rtime;
+
+    if(argptr(1, (void *)&rtime, 4) < 0) return -1;
+    if(argptr(0, (void *)&wtime, 4) < 0) return -1;
+
+    return waitx(wtime, rtime);
 }
 
 int
