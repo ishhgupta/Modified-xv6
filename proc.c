@@ -7,6 +7,10 @@
 #include "proc.h"
 #include "spinlock.h"
 
+#ifdef PBS
+#define DEF_PRIORITY 60
+#endif
+
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
@@ -65,7 +69,6 @@ myproc(void) {
   return p;
 }
 
-
 void bornProc(struct proc *p)
 {
   if(p->pid == 0) return;
@@ -120,6 +123,10 @@ found:
   p->context = (struct context*)sp;
   memset(p->context, 0, sizeof *p->context);
   p->context->eip = (uint)forkret;
+
+#ifdef PBS
+  p->priority = DEF_PRIORITY;
+#endif  
 
   bornProc(p);
   return p;
@@ -184,6 +191,26 @@ growproc(int n)
   return 0;
 }
 
+int PreemptTime(int priori,int checkingPriority){
+  struct proc *p;
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p< &ptable.proc[NPROC]; ++p){
+    if(p->state == RUNNABLE){
+      if(p->priority < priori){
+        release(&ptable.lock);
+        return 1;
+      }
+      if(p->priority == priori){
+        if(checkingPriority){
+          release(&ptable.lock);
+          return 1;
+        }
+      }
+    }
+  }
+  release(&ptable.lock);
+  return 0;
+}
 // Create a new process copying p as the parent.
 // Sets up stack to return as if from system call.
 // Caller must set state of returned proc to RUNNABLE.
@@ -212,6 +239,13 @@ fork(void)
 
   // Clear %eax so that fork returns 0 in the child.
   np->tf->eax = 0;
+
+#ifdef PBS
+  if(!(np && np->pid > 2)){
+    np->priority = DEF_PRIORITY;
+  }
+  else if(np && np->pid>2) np->priority = np->pid/2;
+#endif
 
   for(i = 0; i < NOFILE; i++)
     if(curproc->ofile[i])
@@ -380,16 +414,18 @@ int waitx(int *wtime, int *rtime)
 void
 scheduler(void)
 {
-  struct proc *p;
+  
   struct cpu *c = mycpu();
   c->proc = 0;
-  
+
+#ifdef DEFAULT 
   for(;;){
     // Enable interrupts on this processor.
     sti();
 
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
+    struct proc *p;
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->state != RUNNABLE)
         continue;
@@ -409,7 +445,85 @@ scheduler(void)
       c->proc = 0;
     }
     release(&ptable.lock);
+  }
+#endif
 
+  while(1) {
+    struct proc *alotP = 0;
+    sti();
+    acquire(&ptable.lock);
+
+#ifdef FCFS
+    struct proc *minProc = 0;
+    struct proc *p;
+    for(p= ptable.proc; p<&ptable.proc[NPROC]; ++p){
+      if(p->state == RUNNABLE)
+      {
+        if(!(p->ctime >= minProc->ctime) && minProc)
+          minProc = p;
+        else if (minProc == 0) 
+          minProc = p;
+      }
+    }
+
+    if(minProc != 0){
+      alotP = minProc;
+      cprintf("proc %s with pid %d has been scheduled for running\n",alotP->name,alotP->pid);
+    }
+#endif
+
+#ifdef PBS
+    int minPriority = 105,minPriority2 = 105;
+    struct proc *p;
+    for(p = ptable.proc; p<&ptable.proc[NPROC];++p){
+      if(p->state == RUNNABLE && p->priority < minPriority)
+        minPriority = p->priority;
+    }
+
+    for(p = ptable.proc; p<&ptable.proc[NPROC];++p){
+      if(p->state == RUNNABLE && p->priority == minPriority)
+      {
+        struct proc *alotP = p;
+        c->proc = alotP;
+        alotP->state = RUNNING;
+        switchuvm(alotP);
+
+        alotP->state = RUNNING;
+        swtch(&(c->scheduler),alotP->context);
+        switchkvm();
+        c->proc = 0;
+
+        for(p=ptable.proc;p>&ptable.proc[NPROC];++p)
+        {
+          if(p->state == RUNNABLE && p->priority < minPriority2)
+            minPriority2 = p->priority;
+        }
+
+        if(minPriority > minPriority2) break;
+      }
+    }
+    goto end;
+#endif
+    if(alotP)
+    {
+      switchuvm(alotP);
+      c->proc = alotP;
+      if(!(alotP->state == RUNNABLE))
+      {
+        cprintf("%d\n",alotP->state);
+        printf(2,"The selected process is not runnable\n");
+      }
+
+      alotP ->state = RUNNING;
+      swtch(&(c->scheduler),alotP->context);
+      switchkvm();
+      c->proc = 0;
+    }
+
+#ifdef PBS 
+  end:
+#endif
+    release(&ptable.lock);
   }
 }
 
@@ -590,3 +704,25 @@ procdump(void)
     cprintf("\n");
   }
 }
+
+// int set_priority(int new_priority,int pid)
+// {
+//   if(new_priority >= 0 && new_priority <= 100){
+//     acquire(&ptable.lock);
+//     int old_prio;
+//     for(struct proc *p= ptable.proc; p<&ptable.proc[NPROC];p++ )
+//     {
+//       if(p->pid == pid){
+//         old_prio = p->priority;
+//         p->priority = new_priority;
+//         break;
+//       }
+//     }
+//     release(&ptable.lock);
+//     return old_prio;
+//   }
+//   else{
+//     cprintf("Not a valid priority\n");
+//     return -1;
+//   }
+// }

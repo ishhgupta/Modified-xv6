@@ -16,6 +16,10 @@ sys_fork(void)
 int
 sys_exit(void)
 {
+  #ifdef FCFS 
+    cprintf("ctime is %d\n",myproc()->pid);
+  #endif
+  
   exit();
   return 0;  // not reached
 }
