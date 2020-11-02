@@ -73,9 +73,9 @@ void bornProc(struct proc *p)
 {
   if(p->pid == 0) return;
   if(!p) return;
+  p->etime = -1;
   p->rtime = 0;
   p->ctime = ticks;
-  p->etime = -1;
 }
 //PAGEBREAK: 32
 // Look in the process table for an UNUSED proc.
@@ -191,26 +191,7 @@ growproc(int n)
   return 0;
 }
 
-int PreemptTime(int priori,int checkingPriority){
-  struct proc *p;
-  acquire(&ptable.lock);
-  for(p = ptable.proc; p< &ptable.proc[NPROC]; ++p){
-    if(p->state == RUNNABLE){
-      if(p->priority < priori){
-        release(&ptable.lock);
-        return 1;
-      }
-      if(p->priority == priori){
-        if(checkingPriority){
-          release(&ptable.lock);
-          return 1;
-        }
-      }
-    }
-  }
-  release(&ptable.lock);
-  return 0;
-}
+
 // Create a new process copying p as the parent.
 // Sets up stack to return as if from system call.
 // Caller must set state of returned proc to RUNNABLE.
@@ -265,6 +246,27 @@ fork(void)
   return pid;
 }
 
+int PreemptTime(int priori,int checkingPriority){
+  struct proc *p;
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p< &ptable.proc[NPROC]; ++p){
+    if(p->state == RUNNABLE){
+      if(p->priority < priori){
+        release(&ptable.lock);
+        return 1;
+      }
+      if(p->priority == priori){
+        if(checkingPriority){
+          release(&ptable.lock);
+          return 1;
+        }
+      }
+    }
+  }
+  release(&ptable.lock);
+  return 0;
+}
+
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
 // until its parent calls wait() to find out it exited.
@@ -312,6 +314,51 @@ exit(void)
   panic("zombie exit");
 }
 
+int waitx(int *wtime, int *rtime)
+{
+  struct proc *p;
+  int havekids, pid;
+  struct proc *curproc = myproc();
+  
+  acquire(&ptable.lock);
+  for(;;){
+    // Scan through table looking for exited children.
+    havekids = 0;
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      if(p->parent != curproc)
+        continue;
+      havekids = 1;
+      if(p->state == ZOMBIE){
+        // Found one.
+        pid = p->pid;
+        kfree(p->kstack);
+
+        *rtime = p->rtime;
+        p->etime = ticks;
+        *wtime = p->etime - p->ctime - p->rtime;
+        
+        p->kstack = 0;
+        freevm(p->pgdir);
+        p->pid = 0;
+        p->parent = 0;
+        p->name[0] = 0;
+        p->killed = 0;
+        p->state = UNUSED;
+        release(&ptable.lock);
+        return pid;
+      }
+    }
+
+    // No point waiting if we don't have any children.
+    if(!havekids || curproc->killed){
+      release(&ptable.lock);
+      return -1;
+    }
+
+    // Wait for children to exit.  (See wakeup1 call in proc_exit.)
+    sleep(curproc, &ptable.lock);  //DOC: wait-sleep
+  }
+}
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
 int
@@ -358,51 +405,7 @@ wait(void)
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
-int waitx(int *wtime, int *rtime)
-{
-  struct proc *p;
-  int havekids, pid;
-  struct proc *curproc = myproc();
-  
-  acquire(&ptable.lock);
-  for(;;){
-    // Scan through table looking for exited children.
-    havekids = 0;
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->parent != curproc)
-        continue;
-      havekids = 1;
-      if(p->state == ZOMBIE){
-        // Found one.
-        pid = p->pid;
-        kfree(p->kstack);
 
-        *rtime = p->rtime;
-        p->etime = ticks;
-        *wtime = p->etime - p->ctime - p->rtime;
-        
-        p->kstack = 0;
-        freevm(p->pgdir);
-        p->pid = 0;
-        p->parent = 0;
-        p->name[0] = 0;
-        p->killed = 0;
-        p->state = UNUSED;
-        release(&ptable.lock);
-        return pid;
-      }
-    }
-
-    // No point waiting if we don't have any children.
-    if(!havekids || curproc->killed){
-      release(&ptable.lock);
-      return -1;
-    }
-
-    // Wait for children to exit.  (See wakeup1 call in proc_exit.)
-    sleep(curproc, &ptable.lock);  //DOC: wait-sleep
-  }
-}
 //PAGEBREAK: 42
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
@@ -511,7 +514,7 @@ scheduler(void)
       if(!(alotP->state == RUNNABLE))
       {
         cprintf("%d\n",alotP->state);
-        printf(2,"The selected process is not runnable\n");
+        cprintf("The selected process is not runnable\n");
       }
 
       alotP ->state = RUNNING;
@@ -705,24 +708,45 @@ procdump(void)
   }
 }
 
-// int set_priority(int new_priority,int pid)
-// {
-//   if(new_priority >= 0 && new_priority <= 100){
-//     acquire(&ptable.lock);
-//     int old_prio;
-//     for(struct proc *p= ptable.proc; p<&ptable.proc[NPROC];p++ )
-//     {
-//       if(p->pid == pid){
-//         old_prio = p->priority;
-//         p->priority = new_priority;
-//         break;
-//       }
-//     }
-//     release(&ptable.lock);
-//     return old_prio;
-//   }
-//   else{
-//     cprintf("Not a valid priority\n");
-//     return -1;
-//   }
-// }
+int set_priority(int new_priority,int pid)
+{
+  if(new_priority >= 0 && new_priority <= 100){
+    int old_prio =1;
+    acquire(&ptable.lock);
+    for(struct proc *p= ptable.proc; p<&ptable.proc[NPROC];p++ )
+    {
+      if(p->pid == pid){
+         old_prio = p->priority;
+        p->priority = new_priority;
+        break;
+      }
+    }
+    release(&ptable.lock);
+        return old_prio;
+  }
+  else{
+    cprintf("Not a valid priority\n");
+    return -1;
+  }
+}
+
+void ps(void)
+{
+  static char *states[] = {
+  [UNUSED]    "unused",
+  [EMBRYO]    "embryo",
+  [SLEEPING]  "sleep ",
+  [RUNNABLE]  "runble",
+  [RUNNING]   "run   ",
+  [ZOMBIE]    "zombie"
+  };
+ 
+  struct proc *p;
+  cprintf("\nPID\tPriority\tState\tr_time\tw_time");
+  for(p = ptable.proc; p<&ptable.proc[NPROC]; p++){
+    if(p->pid != 0){
+      cprintf("%d\t%d\t%s\t%d\t%d\n",p->pid,p->priority,states[p->state],p->rtime,p->wtime);
+    }
+  }
+  cprintf("\n");
+}

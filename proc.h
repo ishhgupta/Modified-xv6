@@ -1,4 +1,4 @@
-#include "pstat.h"
+// #include "pstat.h"
 
 // Per-CPU state
 struct cpu {
@@ -56,7 +56,13 @@ struct proc {
   int rtime;                   /// process running time
 
   int priority;                ///priority of processes 
-  struct proc_stat pstat; 
+  char status[100];             ///state of process whether running or sleeping or other
+  // int rtime;                ///total time for each process run    
+  int wtime;                   /// time for which process has been waiting    
+  int n_run;                   /// numbers of times the process was picked up to run    
+  int cur_q;                   /// current queue which was assigned
+  int q[5];                    ///Number of ticks the process has received at each of the 5 queues
+  // struct proc_stat pstat; 
 };
 
 // Process memory is laid out contiguously, low addresses first:
