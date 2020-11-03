@@ -52,7 +52,7 @@ int sys_set_priority(void){
 
 void sys_ps(void){
   ps();
-  return 1;
+  return ;
 }
 
 int
